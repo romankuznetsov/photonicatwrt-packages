@@ -1,0 +1,117 @@
+name: build SDK
+
+# Produces photonicatWrt's own SDK and publishes it as a release asset.
+#
+# This is the slow half, and the reason the other workflow is fast. The SDK
+# carries the prebuilt toolchain and kernel headers, so packages compile
+# against it in minutes instead of rebuilding a 2h30m tree every time.
+#
+# Run it only when the vendor firmware changes. A kernel module carries a
+# vermagic string that must match the running kernel exactly, so an SDK built
+# from one firmware produces kmods that will not load on another.
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: >-
+          ref of romankuznetsov/photonicat_openwrt to build from. That tree
+          has no meaningful tags, so a commit is the only precise answer.
+        default: master
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  sdk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          # The vendor README targets Ubuntu 20.04 and asks for lib32gcc1 and
+          # python2.7, neither of which exists on 24.04.
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang flex bison g++ gawk \
+            gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev \
+            python3 python3-setuptools rsync swig unzip zlib1g-dev file wget time
+
+      - name: Check out photonicatWrt
+        uses: actions/checkout@v4
+        with:
+          repository: romankuznetsov/photonicat_openwrt
+          ref: ${{ inputs.source_ref }}
+          path: src
+
+      - name: Record what we are building
+        id: src
+        working-directory: src
+        run: |
+          commit=$(git rev-parse --short=9 HEAD)
+          kernel=$(sed -n 's/^LINUX_VERSION-6\.12 = \.\([0-9]*\)/6.12.\1/p' include/kernel-6.12)
+          version=$(sed -n 's/^CONFIG_VERSION_NUMBER="\(.*\)"/\1/p' configs/photonicat2_base_defconfig)
+          echo "commit=$commit"   >> "$GITHUB_OUTPUT"
+          echo "kernel=$kernel"   >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "photonicatWrt $version, kernel $kernel, commit $commit"
+          test -n "$kernel" || { echo "::error::could not read the kernel version"; exit 1; }
+
+      - name: Build the SDK
+        working-directory: src
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          cp configs/photonicat2_base_defconfig .config
+
+          # CONFIG_SDK defaults to BUILDBOT, i.e. off here. target/Makefile
+          # hangs sdk/install off linux/install, so the kernel is built either
+          # way; this only adds the packaging step at the end.
+          echo 'CONFIG_SDK=y' >> .config
+          make defconfig
+          grep -q '^CONFIG_SDK=y' .config || { echo "::error::defconfig dropped CONFIG_SDK"; exit 1; }
+
+          make download -j8
+          make -j"$(nproc)" tools/install toolchain/install
+          make -j"$(nproc)" target/linux/install
+          make -j"$(nproc)" target/sdk/install
+
+      - name: Locate the tarball
+        id: find
+        working-directory: src
+        run: |
+          f=$(find bin/targets -name 'openwrt-sdk-*.tar.*' | head -1)
+          test -n "$f" || { echo "::error::no SDK tarball produced"; exit 1; }
+          echo "path=$PWD/$f" >> "$GITHUB_OUTPUT"
+          ls -lh "$f"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: src
+        run: |
+          tag="sdk-${{ steps.src.outputs.version }}-k${{ steps.src.outputs.kernel }}-${{ steps.src.outputs.commit }}"
+          # The tag carries the kernel version because that is what decides
+          # whether the kmods built from this SDK will load, and the source
+          # commit because "26.04.1" does not identify a tree -- that repo
+          # publishes images, not tagged source.
+          cat > /tmp/notes.md <<NOTES
+          photonicatWrt ${{ steps.src.outputs.version }}, kernel ${{ steps.src.outputs.kernel }}
+
+          Built from romankuznetsov/photonicat_openwrt@${{ steps.src.outputs.commit }}.
+          That tree publishes images rather than tagged source, so the commit
+          is the only precise identifier for what went into this SDK.
+
+          Packages built against this SDK load only on a device running kernel
+          ${{ steps.src.outputs.kernel }} -- a kernel module carries a vermagic
+          string that must match exactly. Check \`uname -r\` first.
+          NOTES
+          sed -i 's/^          //' /tmp/notes.md
+
+          gh release create "$tag" "${{ steps.find.outputs.path }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "SDK photonicatWrt ${{ steps.src.outputs.version }} / kernel ${{ steps.src.outputs.kernel }}" \
+            --notes-file /tmp/notes.md
+          echo "released $tag"

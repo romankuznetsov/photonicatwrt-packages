@@ -1,0 +1,182 @@
+name: build feed
+
+# Builds everything in packages.list against the published SDK and deploys
+# the result to GitHub Pages as an opkg feed. Minutes, not hours -- the
+# toolchain and kernel headers come prebuilt from build-sdk.yml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sdk_tag:
+        description: SDK release to build against (empty = the latest)
+        default: ''
+        type: string
+  push:
+    paths:
+      - packages.list
+      - feeds.conf
+      - .github/workflows/build-feed.yml
+
+permissions:
+  contents: write
+
+jobs:
+  feed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out this repository
+        uses: actions/checkout@v4
+        with:
+          path: repo
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang flex bison g++ gawk gettext git \
+            libncurses-dev libssl-dev python3 python3-setuptools rsync \
+            swig unzip zlib1g-dev file wget zstd
+
+      - name: Fetch the SDK
+        id: sdk
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ inputs.sdk_tag }}"
+          if [ -z "$tag" ]; then
+            tag=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 50 \
+                    --json tagName --jq '[.[] | select(.tagName | startswith("sdk-"))][0].tagName')
+          fi
+          test -n "$tag" || { echo "::error::no SDK release found -- run build-sdk first"; exit 1; }
+          echo "using SDK release $tag"
+
+          # sdk-<version>-k<kernel>-<commit>; the kernel is what decides which
+          # feed path the kmods may be published under, so it is taken from
+          # the tag rather than guessed.
+          version=$(echo "$tag" | sed -n 's/^sdk-\([^-]*\)-k.*/\1/p')
+          kernel=$(echo "$tag" | sed -n 's/^sdk-[^-]*-k\([^-]*\)-.*/\1/p')
+          test -n "$version" -a -n "$kernel" || { echo "::error::cannot parse tag $tag"; exit 1; }
+          echo "tag=$tag"         >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "kernel=$kernel"   >> "$GITHUB_OUTPUT"
+
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern '*.tar.*' --dir /tmp
+          mkdir -p /tmp/sdk
+          tar -xf /tmp/openwrt-sdk-*.tar.* -C /tmp/sdk --strip-components=1
+          ls /tmp/sdk | head
+
+      - name: Install feeds
+        working-directory: /tmp/sdk
+        run: |
+          cp "$GITHUB_WORKSPACE/repo/feeds.conf" feeds.conf
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Build the packages
+        working-directory: /tmp/sdk
+        run: |
+          make defconfig
+
+          pkgs=$(grep -vE '^\s*#|^\s*$' "$GITHUB_WORKSPACE/repo/packages.list")
+          test -n "$pkgs" || { echo "::error::packages.list is empty"; exit 1; }
+
+          for p in $pkgs; do
+            # A package whose feed was never installed silently has no config
+            # symbol, and 'make package/<p>/compile' would then do nothing at
+            # all while still exiting 0. Check first.
+            test -d "package/feeds"/*/"$p" || \
+              { echo "::error::$p is not in any installed feed"; exit 1; }
+            echo "CONFIG_PACKAGE_$p=m" >> .config
+          done
+          make defconfig
+
+          for p in $pkgs; do
+            grep -q "^CONFIG_PACKAGE_$p=m\$" .config || \
+              { echo "::error::defconfig dropped $p -- unmet dependency?"; exit 1; }
+          done
+
+          for p in $pkgs; do
+            echo "::group::$p"
+            make -j"$(nproc)" "package/$p/compile"
+            echo "::endgroup::"
+          done
+
+      - name: Collect and index
+        id: collect
+        working-directory: /tmp/sdk
+        run: |
+          V="${{ steps.sdk.outputs.version }}"
+          K="${{ steps.sdk.outputs.kernel }}"
+          user="$PWD/out"
+          kmod="$PWD/out-kmod"
+          mkdir -p "$user" "$kmod"
+
+          # Userspace packages are not bound to a kernel; kernel modules are,
+          # and are published under a path naming the kernel so a mismatch
+          # 404s on 'opkg update' instead of installing something unloadable.
+          find bin/packages -name '*.ipk' -exec cp {} "$user/" \;
+          find bin/targets  -name 'kmod-*.ipk' -exec cp {} "$kmod/" \;
+
+          for d in "$user" "$kmod"; do
+            n=$(find "$d" -name '*.ipk' | wc -l)
+            echo "$d: $n package(s)"
+            [ "$n" -gt 0 ] || continue
+            ( cd "$d" && "$OLDPWD/scripts/ipkg-make-index.sh" . > Packages 2>/dev/null \
+              && gzip -9fk Packages )
+          done
+
+          test -n "$(find "$kmod" -name 'kmod-*.ipk' -print -quit)" || \
+            { echo "::error::no kernel modules produced"; exit 1; }
+
+          echo "userdir=$user" >> "$GITHUB_OUTPUT"
+          echo "kmoddir=$kmod" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to Pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="${{ steps.sdk.outputs.version }}"
+          K="${{ steps.sdk.outputs.kernel }}"
+
+          # Done by hand rather than with a third-party action so the merge
+          # semantics are explicit: other firmware versions and other kernels
+          # already published must survive, because devices still point at
+          # them until they are upgraded.
+          git clone --depth 1 --branch gh-pages \
+            "https://x-access-token:$GH_TOKEN@github.com/$GITHUB_REPOSITORY" pages 2>/dev/null \
+            || { mkdir pages && cd pages && git init -q && git checkout -qb gh-pages && cd ..; }
+
+          ud="pages/$V/aarch64_generic"
+          kd="pages/$V/rockchip-armv8/$K"
+          rm -rf "$ud" "$kd"
+          mkdir -p "$ud" "$kd"
+          cp "${{ steps.collect.outputs.userdir }}"/* "$ud"/ 2>/dev/null || true
+          cp "${{ steps.collect.outputs.kmoddir }}"/* "$kd"/ 2>/dev/null || true
+
+          cat > "pages/manifest.json" <<JSON
+          {
+            "firmware": "$V",
+            "kernel": "$K",
+            "sdk_release": "${{ steps.sdk.outputs.tag }}",
+            "built": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "run": "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          }
+          JSON
+          # Pages serves Jekyll by default, which eats directories beginning
+          # with an underscore and can rewrite things it thinks are templates.
+          touch pages/.nojekyll
+
+          cd pages
+          git add -A
+          git -c user.name=github-actions -c user.email=github-actions@github.com \
+            commit -m "feed: $V / kernel $K from ${{ steps.sdk.outputs.tag }}" || {
+              echo "nothing changed"; exit 0; }
+          git push "https://x-access-token:$GH_TOKEN@github.com/$GITHUB_REPOSITORY" gh-pages
+
+          echo "### Feed published" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "src/gz pcat_pkgs https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/$V/aarch64_generic" >> "$GITHUB_STEP_SUMMARY"
+          echo "src/gz pcat_kmod https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/$V/rockchip-armv8/$K" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

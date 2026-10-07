@@ -1,0 +1,10 @@
+# Packages to build, one per line, blank lines and # comments ignored.
+# The name is the OpenWrt package name, i.e. what `make package/<name>/compile`
+# takes and what `opkg install <name>` will take on the device.
+#
+# Adding a line here and pushing is the whole process for adding a package.
+# If it comes from a feed that is not already in feeds.conf, add that too.
+
+kmod-amneziawg
+amneziawg-tools
+luci-proto-amneziawg

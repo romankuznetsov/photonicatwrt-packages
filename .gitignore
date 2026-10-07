@@ -1,0 +1,4 @@
+bin/
+sdk/
+*.tar.zst
+*.ipk
