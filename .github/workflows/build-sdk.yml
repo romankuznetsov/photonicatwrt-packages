@@ -66,16 +66,40 @@ jobs:
           ./scripts/feeds install -a
           cp configs/photonicat2_base_defconfig .config
 
+          # Drop every package selection. An SDK carries a toolchain and
+          # kernel headers -- it does not need the vendor's 1776 packages,
+          # and building them makes the SDK hostage to each one. Run
+          # 37687211159 proved the point: it spent 2h29m and then died on
+          # 'package/feeds/packages/v2ray-geodata failed to build', a package
+          # that is =m, absent from the image, and irrelevant here. The
+          # target, kernel and toolchain settings all live in other symbols
+          # and are untouched; make defconfig restores the handful of base
+          # packages a target genuinely requires.
+          sed -i -E '/^CONFIG_PACKAGE_/d' .config
+
           # CONFIG_SDK defaults to BUILDBOT, i.e. off here. target/Makefile
           # hangs sdk/install off linux/install, so the kernel is built either
           # way; this only adds the packaging step at the end.
           echo 'CONFIG_SDK=y' >> .config
           make defconfig
           grep -q '^CONFIG_SDK=y' .config || { echo "::error::defconfig dropped CONFIG_SDK"; exit 1; }
+          echo "packages still selected after stripping: $(grep -c '^CONFIG_PACKAGE_.*=[ym]' .config)"
+
+          # Guard the thing that actually matters: the SDK is only useful if
+          # its kernel matches the device's.
+          grep -q "^CONFIG_LINUX_6_12=y" .config || \
+            { echo "::error::kernel series is not 6.12 after defconfig"; exit 1; }
 
           make download -j8
           make -j"$(nproc)" tools/install toolchain/install
-          make -j"$(nproc)" target/linux/install
+
+          # OpenWrt reports 'ERROR: target/linux failed to build' and nothing
+          # else, which cost a 2h29m run to diagnose last time. Retry once
+          # verbosely so the real error is in the log.
+          make -j"$(nproc)" target/linux/install || {
+            echo "::warning::target/linux/install failed; re-running verbosely"
+            make -j1 V=s target/linux/install
+          }
           make -j"$(nproc)" target/sdk/install
 
       - name: Locate the tarball
