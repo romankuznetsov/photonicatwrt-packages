@@ -166,8 +166,18 @@ jobs:
         id: find
         working-directory: src
         run: |
-          f=$(find bin/targets -name 'openwrt-sdk-*.tar.*' | head -1)
-          test -n "$f" || { echo "::error::no SDK tarball produced"; exit 1; }
+          # NOT 'openwrt-sdk-*'. target/sdk/Makefile builds
+          # $(VERSION_DIST_SANITIZED)-sdk-..., and CONFIG_VERSION_DIST here is
+          # "photonicatWrt", so the file is photonicatwrt-sdk-*.tar.xz.
+          # Matching the upstream name cost run 37716104046: the build
+          # succeeded after 2h47m and then failed to find its own output.
+          f=$(find bin -name '*-sdk-*.tar.*' | head -1)
+          if [ -z "$f" ]; then
+            echo "::error::no SDK tarball produced"
+            echo "contents of bin/, so the next failure needs no second run:"
+            find bin -maxdepth 4 -type f | head -40
+            exit 1
+          fi
           echo "path=$PWD/$f" >> "$GITHUB_OUTPUT"
           ls -lh "$f"
 
