@@ -202,6 +202,20 @@ jobs:
           echo "path=$PWD/$f" >> "$GITHUB_OUTPUT"
           ls -lh "$f"
 
+      - name: Keep the tarball as an artifact
+        # Insurance. Run 37746082206 built the SDK in 1h52m and then threw it
+        # away because the publish step hit an existing tag -- the runner is
+        # destroyed with the file on it. An artifact survives a failure in
+        # the step after this one, so the build can be salvaged by hand
+        # rather than repeated.
+        if: always() && steps.find.outputs.path != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdk-tarball
+          path: ${{ steps.find.outputs.path }}
+          retention-days: 7
+          if-no-files-found: warn
+
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -225,8 +239,22 @@ jobs:
           NOTES
           sed -i 's/^          //' /tmp/notes.md
 
-          gh release create "$tag" "${{ steps.find.outputs.path }}" \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "SDK photonicatWrt ${{ steps.src.outputs.version }} / kernel ${{ steps.src.outputs.kernel }}" \
-            --notes-file /tmp/notes.md
+          title="SDK photonicatWrt ${{ steps.src.outputs.version }} / kernel ${{ steps.src.outputs.kernel }}"
+
+          # The tag is version + kernel + source commit, so rebuilding from
+          # the same source deliberately produces the same tag -- and the
+          # rebuild is usually the better artifact, as when run 37746082206
+          # added the 400 kmods the first SDK was missing. gh release create
+          # refuses an existing tag outright, so replace the asset instead of
+          # failing after a two-hour build.
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $tag exists; replacing its asset"
+            gh release upload "$tag" "${{ steps.find.outputs.path }}" \
+              --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" \
+              --title "$title" --notes-file /tmp/notes.md
+          else
+            gh release create "$tag" "${{ steps.find.outputs.path }}" \
+              --repo "$GITHUB_REPOSITORY" --title "$title" --notes-file /tmp/notes.md
+          fi
           echo "released $tag"
