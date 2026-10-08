@@ -139,6 +139,26 @@ jobs:
               { echo "::error::defconfig dropped $p -- unmet dependency?"; exit 1; }
           done
 
+          # Kernel modules pulled in by DEPENDS have to exist as built .ko
+          # before a kmod can be packaged: OpenWrt scans the module's symbols
+          # against them and refuses otherwise. kmod-amneziawg DEPENDS on
+          # +kmod-udptunnel4/6 and +kmod-crypto-lib-chacha20poly1305/curve25519,
+          # and the leading + makes defconfig select them -- but selecting is
+          # not building, and 'make package/<p>/compile' builds only <p>. That
+          # is the whole difference from the full-tree build, which compiled
+          # everything selected and so had them to hand:
+          #
+          #   Package kmod-amneziawg is missing dependencies for the following
+          #   libraries: chacha-neon.ko libchacha20poly1305.ko
+          #              libcurve25519-generic.ko
+          #
+          # All kmods live in package/kernel/linux, so one compile covers
+          # whatever the selected set happens to need, without this workflow
+          # having to know the dependency list.
+          echo "::group::kernel modules"
+          make -j"$(nproc)" package/kernel/linux/compile
+          echo "::endgroup::"
+
           for p in $pkgs; do
             echo "::group::$p"
             # OpenWrt's failure message is "ERROR: <pkg> failed to build" and
