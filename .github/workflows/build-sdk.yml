@@ -87,16 +87,28 @@ jobs:
           ./scripts/feeds install -a
           cp configs/photonicat2_base_defconfig .config
 
-          # Drop every package selection. An SDK carries a toolchain and
-          # kernel headers -- it does not need the vendor's 1776 packages,
-          # and building them makes the SDK hostage to each one. Run
-          # 37687211159 proved the point: it spent 2h29m and then died on
-          # 'package/feeds/packages/v2ray-geodata failed to build', a package
-          # that is =m, absent from the image, and irrelevant here. The
-          # target, kernel and toolchain settings all live in other symbols
-          # and are untouched; make defconfig restores the handful of base
-          # packages a target genuinely requires.
-          sed -i -E '/^CONFIG_PACKAGE_/d' .config
+          # Drop the userspace package selections but KEEP every kmod.
+          #
+          # Dropping the lot was the first instinct and it was wrong. An SDK
+          # does not need the vendor's 1373 userspace packages -- building
+          # them makes it hostage to each one, and run 37687211159 spent 2h29m
+          # before dying on v2ray-geodata, a package that is =m and absent
+          # from the image. But the 400 kmod selections are a different
+          # matter: they decide which kernel modules the kernel build
+          # produces, and an out-of-tree module has to link against them.
+          # Without them, feed run 37745446554 failed with
+          #
+          #   Package kmod-amneziawg is missing dependencies for the
+          #   following libraries: chacha-neon.ko libchacha20poly1305.ko
+          #                        libcurve25519-generic.ko
+          #
+          # which are exactly kmod-crypto-lib-chacha20poly1305 and
+          # kmod-crypto-lib-curve25519, both =y in the vendor config.
+          #
+          # kmods are cheap -- they are built with the kernel either way --
+          # so keeping all 400 costs little and spares this file a dependency
+          # list that would rot.
+          sed -i -E '/^CONFIG_PACKAGE_kmod-/!{/^CONFIG_PACKAGE_/d}' .config
 
           # CONFIG_SDK defaults to BUILDBOT, i.e. off here. target/Makefile
           # hangs sdk/install off linux/install, so the kernel is built either
@@ -105,6 +117,15 @@ jobs:
           make defconfig
           grep -q '^CONFIG_SDK=y' .config || { echo "::error::defconfig dropped CONFIG_SDK"; exit 1; }
           echo "packages still selected after stripping: $(grep -c '^CONFIG_PACKAGE_.*=[ym]' .config)"
+          echo "  of which kmods: $(grep -c '^CONFIG_PACKAGE_kmod-.*=[ym]' .config)"
+
+          # The crypto libraries kmod-amneziawg links against. Checked here
+          # rather than discovered two hours later in a feed build.
+          for k in kmod-crypto-lib-chacha20poly1305 kmod-crypto-lib-curve25519 \
+                   kmod-udptunnel4 kmod-udptunnel6; do
+            grep -q "^CONFIG_PACKAGE_$k=[ym]\$" .config || \
+              { echo "::error::$k is not selected; out-of-tree modules will not link"; exit 1; }
+          done
 
           # Guard the thing that actually matters: the SDK is only useful if
           # its kernel matches the device's.
