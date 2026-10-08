@@ -1,0 +1,7 @@
+{
+  "firmware": "26.04.1",
+  "kernel": "6.12.91",
+  "sdk_release": "sdk-26.04.1-k6.12.91-be0f16674",
+  "built": "2026-10-08T11:55:53Z",
+  "run": "https://github.com/romankuznetsov/photonicatwrt-packages/actions/runs/37772940263"
+}

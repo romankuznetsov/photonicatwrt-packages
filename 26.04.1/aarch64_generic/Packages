@@ -1,0 +1,68 @@
+Package: amneziawg-tools
+Version: 3.1.20260812-1
+Depends: libc, kmod-amneziawg
+Source: feeds/awg/amneziawg-tools
+SourceName: amneziawg-tools
+License: GPL-2.0
+LicenseFiles: COPYING
+Section: net
+SourceDateEpoch: 1790098892
+Maintainer: Amnezia Admin <admin@amnezia.org>
+Architecture: aarch64_generic
+Installed-Size: 35622
+Filename: amneziawg-tools_3.1.20260812-1_aarch64_generic.ipk
+Size: 36229
+SHA256sum: 2c52510d67b81437a55629a09af38d95b44f3b1049b1b68efaee0fdf6257ed03
+Description:  Amnezia VPN — simple and free app to run a self-hosted VPN with
+ high privacy requirements.
+ 
+ This package provides the userspace control program for AmneziaWG,
+ `awg`, a netifd protocol helper, and a re-resolve watchdog script.
+
+Package: luci-i18n-amneziawg-ru
+Version: 26.265.63692~03b6226
+Depends: libc, luci-proto-amneziawg
+Source: feeds/awg/luci-proto-amneziawg
+SourceName: luci-i18n-amneziawg-ru
+License: Apache-2.0
+Section: luci
+SourceDateEpoch: 1790098892
+Architecture: all
+Installed-Size: 3592
+Filename: luci-i18n-amneziawg-ru_26.265.63692~03b6226_all.ipk
+Size: 4353
+SHA256sum: 8ede932e48b22904bb4e72ba8d71996c52f0876e351f9f0b50c517a0e27f7044
+Description:  Translation for luci-proto-amneziawg - Русский (Russian)
+
+Package: luci-lib-uqr
+Version: 26.111.21875~279b9e8
+Depends: libc
+Source: feeds/luci/libs/luci-lib-uqr
+SourceName: luci-lib-uqr
+License: MIT
+Section: luci
+SourceDateEpoch: 1776751475
+Maintainer: OpenWrt LuCI community
+Architecture: all
+Installed-Size: 4920
+Filename: luci-lib-uqr_26.111.21875~279b9e8_all.ipk
+Size: 5767
+SHA256sum: 9768a64f3162a72ef738c813a51123450a51bfc5a45fa323e9a71580c3fc90cb
+Description:  µQR - micro QR: SVG QRcode generator JS library
+
+Package: luci-proto-amneziawg
+Version: 3.1.0-r1
+Depends: libc, amneziawg-tools, ucode, luci-lib-uqr, resolveip
+Source: feeds/awg/luci-proto-amneziawg
+SourceName: luci-proto-amneziawg
+License: Apache-2.0
+Section: luci
+SourceDateEpoch: 1790098892
+Maintainer: OpenWrt LuCI community
+Architecture: all
+Installed-Size: 30294
+Filename: luci-proto-amneziawg_3.1.0-r1_all.ipk
+Size: 31165
+SHA256sum: 3f582b14051684b4b6e332e7465fbe254a71ef39b28baa8f666ef94f543cd371
+Description:  Provides support and Web UI for AmneziaWG VPN
+
