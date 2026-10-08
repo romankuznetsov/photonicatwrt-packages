@@ -188,12 +188,20 @@ jobs:
           find bin/packages -name '*.ipk' -exec cp {} "$user/" \;
           find bin/targets  -name 'kmod-*.ipk' -exec cp {} "$kmod/" \;
 
+          # Absolute path, resolved before any cd. The previous version used
+          # "$OLDPWD/scripts/ipkg-make-index.sh" from inside a subshell that
+          # had just cd'd, which exited 127 -- and the error was invisible
+          # because stderr went to /dev/null, so the run reported only
+          # "exit code 127" with nothing to go on.
+          idx="$PWD/scripts/ipkg-make-index.sh"
+          test -x "$idx" || { echo "::error::$idx missing or not executable"; ls -l "$PWD/scripts" | head -20; exit 1; }
+
           for d in "$user" "$kmod"; do
             n=$(find "$d" -name '*.ipk' | wc -l)
             echo "$d: $n package(s)"
             [ "$n" -gt 0 ] || continue
-            ( cd "$d" && "$OLDPWD/scripts/ipkg-make-index.sh" . > Packages 2>/dev/null \
-              && gzip -9fk Packages )
+            ( cd "$d" && "$idx" . > Packages && gzip -9fk Packages )
+            echo "  indexed: $(grep -c '^Package:' "$d/Packages") entries"
           done
 
           test -n "$(find "$kmod" -name 'kmod-*.ipk' -print -quit)" || \
