@@ -167,7 +167,18 @@ jobs:
       - name: Build the SDK
         working-directory: src
         run: |
-          make -j"$(nproc)" target/compile
+          # IGNORE_ERRORS=m here too. target/compile pulls package builds in
+          # with it, and run 37777914498 died inside this phase on
+          # v2ray-geodata -- the same package as before, because make
+          # defconfig puts it back: the strip left 1762 selections and
+          # defconfig returned 1764. Something in the vendor config depends
+          # on it.
+          #
+          # Letting defconfig restore it is correct, in fact. The device's
+          # own config selects v2ray too, so keeping it selected is part of
+          # matching the kernel config hash; it simply must not be allowed to
+          # abort the build when it fails to compile.
+          make -j"$(nproc)" IGNORE_ERRORS=m target/compile
 
           # Assert the kernel config hash NOW, ~30 minutes in, rather than
           # discovering after hours of packaging that every kmod is
@@ -205,11 +216,11 @@ jobs:
           # OpenWrt reports 'ERROR: target/linux failed to build' and nothing
           # else, which cost a 2h29m run to diagnose. Retry once verbosely so
           # the real error is in the log rather than in the next run.
-          make -j"$(nproc)" target/linux/install || {
+          make -j"$(nproc)" IGNORE_ERRORS=m target/linux/install || {
             echo "::warning::target/linux/install failed; re-running verbosely"
             make -j1 V=s target/linux/install
           }
-          make -j"$(nproc)" target/sdk/install
+          make -j"$(nproc)" IGNORE_ERRORS=m target/sdk/install
 
       - name: Locate the tarball
         id: find
