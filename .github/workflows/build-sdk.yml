@@ -92,10 +92,24 @@ jobs:
 
           make download -j8
           make -j"$(nproc)" tools/install toolchain/install
+          make -j"$(nproc)" target/compile
+
+          # target/linux/install builds device images, and an image needs a
+          # rootfs that only package/install produces. Skipping these two was
+          # what killed run 37703634406:
+          #
+          #   tar: .../build_dir/target-aarch64_generic_musl/root-rockchip/:
+          #        Cannot open: No such file or directory
+          #
+          # With the package list stripped to 240 these are cheap, where the
+          # vendor's full 1776 is what made the first attempt fail on an
+          # unrelated package.
+          make -j"$(nproc)" package/compile
+          make -j"$(nproc)" package/install
 
           # OpenWrt reports 'ERROR: target/linux failed to build' and nothing
-          # else, which cost a 2h29m run to diagnose last time. Retry once
-          # verbosely so the real error is in the log.
+          # else, which cost a 2h29m run to diagnose. Retry once verbosely so
+          # the real error is in the log rather than in the next run.
           make -j"$(nproc)" target/linux/install || {
             echo "::warning::target/linux/install failed; re-running verbosely"
             make -j1 V=s target/linux/install
