@@ -92,6 +92,30 @@ jobs:
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+
+          # v2ray-geodata cannot be built at all, by anyone, and has killed
+          # three runs here. Its Makefile pins dated GitHub release assets:
+          #
+          #   GEOIP_VER=202404040040      geoip.dat -> 200
+          #   GEOSITE_VER=20240404120755  dlc.dat   -> 404
+          #
+          # v2fly/domain-list-community prunes old releases, so that tag is
+          # simply gone. It fails in the *download* phase, which is why
+          # IGNORE_ERRORS=m never caught it -- that governs building, not
+          # fetching -- and why no amount of retrying would have helped.
+          #
+          # Deleting the config symbols does not work either: make defconfig
+          # puts them straight back, because other packages depend on them.
+          # Removing it from the feed is what actually stops it, since the
+          # symbol then does not exist to be selected.
+          #
+          # The hash assertion after target/compile is the safety net: if
+          # dropping this package or its dependents disturbs the kernel
+          # config, the build fails in about half an hour and says so.
+          ./scripts/feeds uninstall v2ray-geodata 2>/dev/null || true
+          test ! -e package/feeds/packages/v2ray-geodata || \
+            { echo "::error::v2ray-geodata is still installed in the feed"; exit 1; }
+          echo "v2ray-geodata removed from the feed"
           cp configs/photonicat2_base_defconfig .config
 
           # Strip ONLY node and v2ray, and nothing else.
