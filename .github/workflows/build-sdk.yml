@@ -59,7 +59,28 @@ jobs:
           echo "photonicatWrt $version, kernel $kernel, commit $commit"
           test -n "$kernel" || { echo "::error::could not read the kernel version"; exit 1; }
 
-      - name: Build the SDK
+      - name: Restore the toolchain
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          # tools/install and toolchain/install are 1h23m and 23m of the
+          # roughly 2h30m this job takes, and they are identical between
+          # attempts at the same source commit. Three failed runs rebuilt them
+          # from scratch each time before dying further along.
+          #
+          # Exact key only, no restore-keys: a toolchain restored from a
+          # different commit or config could be subtly wrong in ways that
+          # surface much later, and a wrong SDK produces kmods that do not
+          # load. Better to spend the 1h46m than to debug that.
+          path: |
+            src/dl
+            src/staging_dir
+            src/build_dir/toolchain-*
+            src/build_dir/host
+            src/build_dir/hostpkg
+          key: sdk-toolchain-${{ steps.src.outputs.commit }}-${{ hashFiles('src/configs/photonicat2_base_defconfig') }}
+
+      - name: Configure the tree
         working-directory: src
         run: |
           ./scripts/feeds update -a
@@ -90,8 +111,33 @@ jobs:
           grep -q "^CONFIG_LINUX_6_12=y" .config || \
             { echo "::error::kernel series is not 6.12 after defconfig"; exit 1; }
 
+      - name: Build the toolchain
+        id: toolchain
+        working-directory: src
+        run: |
           make download -j8
           make -j"$(nproc)" tools/install toolchain/install
+          du -sh staging_dir dl build_dir/toolchain-* build_dir/host build_dir/hostpkg 2>/dev/null | sort -h
+
+      - name: Save the toolchain
+        # always(), because the point is to survive a failure further along --
+        # actions/cache only saves on success, which is exactly backwards for
+        # a job whose later steps are the ones being debugged. Skipped on a
+        # cache hit, since nothing in it changed.
+        if: always() && steps.toolchain.outcome == 'success' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            src/dl
+            src/staging_dir
+            src/build_dir/toolchain-*
+            src/build_dir/host
+            src/build_dir/hostpkg
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+      - name: Build the SDK
+        working-directory: src
+        run: |
           make -j"$(nproc)" target/compile
 
           # target/linux/install builds device images, and an image needs a
