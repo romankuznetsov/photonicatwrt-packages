@@ -196,6 +196,17 @@ jobs:
           idx="$PWD/scripts/ipkg-make-index.sh"
           test -x "$idx" || { echo "::error::$idx missing or not executable"; ls -l "$PWD/scripts" | head -20; exit 1; }
 
+          # ipkg-make-index.sh does `sha256sum=$($MKHASH sha256 $pkg)`, and
+          # MKHASH is normally exported by rules.mk when make invokes it.
+          # Running the script directly skips that, so it executes the bare
+          # word "sha256" and dies with "command not found" -- which reads as
+          # a missing path until you see the line. The SDK ships the tool as
+          # staging_dir/host/bin/mkhash.
+          export MKHASH="$PWD/staging_dir/host/bin/mkhash"
+          test -x "$MKHASH" || { echo "::error::$MKHASH missing"; exit 1; }
+          # Host tools generally, for anything else the script reaches for.
+          export PATH="$PWD/staging_dir/host/bin:$PATH"
+
           for d in "$user" "$kmod"; do
             n=$(find "$d" -name '*.ipk' | wc -l)
             echo "$d: $n package(s)"
