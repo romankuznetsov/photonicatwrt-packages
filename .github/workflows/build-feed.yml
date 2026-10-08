@@ -113,7 +113,14 @@ jobs:
 
           for p in $pkgs; do
             echo "::group::$p"
-            make -j"$(nproc)" "package/$p/compile"
+            # OpenWrt's failure message is "ERROR: <pkg> failed to build" and
+            # nothing else. Retrying verbosely costs a couple of minutes here
+            # and saves a whole round trip; the same omission in build-sdk.yml
+            # cost a 2h29m run before it was added there.
+            make -j"$(nproc)" "package/$p/compile" || {
+              echo "::warning::$p failed, re-running single-threaded for a readable error"
+              make -j1 V=s "package/$p/compile"
+            }
             echo "::endgroup::"
           done
 
