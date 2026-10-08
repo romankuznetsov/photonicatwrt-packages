@@ -13,6 +13,13 @@ name: build SDK
 on:
   workflow_dispatch:
     inputs:
+      expect_vermagic:
+        description: >-
+          kernel config hash the device runs; the build fails fast if it
+          does not match, because kmods would then be uninstallable. Empty
+          to skip the check. `opkg list-installed kernel` on the device.
+        default: dd4287729a6652db5d2990f7ec1072e9
+        type: string
       source_ref:
         description: >-
           ref of romankuznetsov/photonicat_openwrt to build from. That tree
@@ -87,28 +94,29 @@ jobs:
           ./scripts/feeds install -a
           cp configs/photonicat2_base_defconfig .config
 
-          # Drop the userspace package selections but KEEP every kmod.
+          # Strip ONLY node and v2ray, and nothing else.
           #
-          # Dropping the lot was the first instinct and it was wrong. An SDK
-          # does not need the vendor's 1373 userspace packages -- building
-          # them makes it hostage to each one, and run 37687211159 spent 2h29m
-          # before dying on v2ray-geodata, a package that is =m and absent
-          # from the image. But the 400 kmod selections are a different
-          # matter: they decide which kernel modules the kernel build
-          # produces, and an out-of-tree module has to link against them.
-          # Without them, feed run 37745446554 failed with
+          # The kernel config hash is what every kmod package depends on:
           #
-          #   Package kmod-amneziawg is missing dependencies for the
-          #   following libraries: chacha-neon.ko libchacha20poly1305.ko
-          #                        libcurve25519-generic.ko
+          #   Depends: kernel (=6.12.91-1-<hash>)
           #
-          # which are exactly kmod-crypto-lib-chacha20poly1305 and
-          # kmod-crypto-lib-curve25519, both =y in the vendor config.
+          # and include/kernel-defaults.mk computes it as
           #
-          # kmods are cheap -- they are built with the kernel either way --
-          # so keeping all 400 costs little and spares this file a dependency
-          # list that would rot.
-          sed -i -E '/^CONFIG_PACKAGE_kmod-/!{/^CONFIG_PACKAGE_/d}' .config
+          #   grep '=[ym]' $(LINUX_DIR)/.config.set | LC_ALL=C sort | mkhash md5
+          #
+          # i.e. an md5 of the kernel's own config. Package selections feed
+          # into it only where a package declares KCONFIG, which 44 packages
+          # in the base tree do. Stripping all 1373 userspace entries
+          # therefore moved the hash to e0a9c3e3..., while the device has
+          # dd428772..., and every kmod built here became uninstallable:
+          # opkg refuses it, and neither --force-depends nor --nodeps helps
+          # because the check happens during resolution.
+          #
+          # node and v2ray-geodata both declare no KCONFIG (checked), so
+          # dropping them cannot change the kernel config -- while saving the
+          # 2h29m of host V8 that killed run 37610731481 and the
+          # v2ray-geodata failure that killed 37687211159.
+          sed -i -E '/^CONFIG_PACKAGE_(node|v2ray)/d' .config
 
           # CONFIG_SDK defaults to BUILDBOT, i.e. off here. target/Makefile
           # hangs sdk/install off linux/install, so the kernel is built either
@@ -161,6 +169,20 @@ jobs:
         run: |
           make -j"$(nproc)" target/compile
 
+          # Assert the kernel config hash NOW, ~30 minutes in, rather than
+          # discovering after hours of packaging that every kmod is
+          # uninstallable. .vermagic is written during Kernel/Configure, so
+          # it is already final at this point.
+          vm=$(cat build_dir/target-*/linux-*/.vermagic 2>/dev/null)
+          echo "kernel config hash: $vm"
+          want="${{ inputs.expect_vermagic }}"
+          if [ -n "$want" ] && [ "$vm" != "$want" ]; then
+            echo "::error::kernel config hash is $vm, expected $want"
+            echo "kmods built here would carry Depends: kernel (=${{ steps.src.outputs.kernel }}-1-$vm)"
+            echo "and the device would refuse them. The .config differs from the vendor's."
+            exit 1
+          fi
+
           # target/linux/install builds device images, and an image needs a
           # rootfs that only package/install produces. Skipping these two was
           # what killed run 37703634406:
@@ -171,8 +193,14 @@ jobs:
           # With the package list stripped to 240 these are cheap, where the
           # vendor's full 1776 is what made the first attempt fail on an
           # unrelated package.
-          make -j"$(nproc)" package/compile
-          make -j"$(nproc)" package/install
+          # IGNORE_ERRORS=m lets a failing '=m' package be skipped rather
+          # than abort the run. With the vendor's full selection restored
+          # this phase attempts ~1760 packages, and losing all of it to one
+          # flaky optional package -- which is exactly how run 37687211159
+          # ended, on v2ray-geodata -- is not a good trade. Packages that are
+          # '=y', i.e. actually in the image, still fail the build.
+          make -j"$(nproc)" IGNORE_ERRORS=m package/compile
+          make -j"$(nproc)" IGNORE_ERRORS=m package/install
 
           # OpenWrt reports 'ERROR: target/linux failed to build' and nothing
           # else, which cost a 2h29m run to diagnose. Retry once verbosely so
