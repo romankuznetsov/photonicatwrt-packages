@@ -88,6 +88,34 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
+      - name: Patch kmod-amneziawg for out-of-tree symvers
+        working-directory: /tmp/sdk
+        run: |
+          mk=feeds/awg/kmod-amneziawg/Makefile
+          test -f "$mk" || { echo "::error::$mk missing -- did the awg feed install?"; exit 1; }
+
+          # The package builds with M=$(PKG_BUILD_DIR)/src, so MODPOST writes
+          # src/Module.symvers. OpenWrt then runs collect_module_symvers,
+          # which greps $(PKG_BUILD_DIR)/$subdir/Module.symvers over
+          # PKG_EXTMOD_SUBDIRS -- defaulting to "." (include/kernel.mk:143).
+          # It therefore looks in the package root, finds nothing, and the
+          # sort and mv that follow fail:
+          #
+          #   grep: .../kmod-amneziawg-3.1.20260906/./Module.symvers:
+          #         No such file or directory
+          #
+          # The module itself compiles fine; this is purely the symvers
+          # collection looking in the wrong directory.
+          if ! grep -q '^PKG_EXTMOD_SUBDIRS' "$mk"; then
+            sed -i 's|^MAKE_PATH:=src$|MAKE_PATH:=src\nPKG_EXTMOD_SUBDIRS:=src|' "$mk"
+          fi
+          grep -q '^PKG_EXTMOD_SUBDIRS:=src$' "$mk" || {
+            echo "::error::patch did not apply -- upstream Makefile has changed"
+            grep -nE 'MAKE_PATH|PKG_EXTMOD_SUBDIRS' "$mk"
+            exit 1
+          }
+          echo "patched: $(grep -n '^PKG_EXTMOD_SUBDIRS' "$mk")"
+
       - name: Build the packages
         working-directory: /tmp/sdk
         run: |
