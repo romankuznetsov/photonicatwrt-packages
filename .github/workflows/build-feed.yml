@@ -63,8 +63,22 @@ jobs:
           echo "kernel=$kernel"   >> "$GITHUB_OUTPUT"
 
           gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern '*.tar.*' --dir /tmp
+
+          # NOT 'openwrt-sdk-*'. target/sdk/Makefile names the tarball
+          # $(VERSION_DIST_SANITIZED)-sdk-..., and VERSION_DIST here is
+          # "photonicatWrt", so it is photonicatwrt-sdk-*.tar.xz. The same
+          # wrong assumption cost a 2h47m run in build-sdk.yml; resolve the
+          # glob into a variable and check it, rather than feeding an
+          # unmatched pattern straight to tar.
+          f=$(ls /tmp/*-sdk-*.tar.* 2>/dev/null | head -1)
+          if [ -z "$f" ]; then
+            echo "::error::no SDK tarball in the download"
+            ls -la /tmp | head -20
+            exit 1
+          fi
+          echo "extracting $f"
           mkdir -p /tmp/sdk
-          tar -xf /tmp/openwrt-sdk-*.tar.* -C /tmp/sdk --strip-components=1
+          tar -xf "$f" -C /tmp/sdk --strip-components=1
           ls /tmp/sdk | head
 
       - name: Install feeds

@@ -48,7 +48,7 @@ each time.
 
 ```
 build-sdk.yml    ~2h30m, run only when the vendor firmware changes
-                 -> openwrt-sdk-*.tar.zst as a release asset,
+                 -> photonicatwrt-sdk-*.tar.xz as a release asset,
                     tagged with the kernel version and source commit
 
 build-feed.yml   minutes
